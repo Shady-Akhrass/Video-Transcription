@@ -10,7 +10,7 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext
 import threading
 import time
 from datetime import timedelta
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from moviepy.video.io.VideoFileClip import VideoFileClip
 from pydub import AudioSegment
 from pydub.utils import make_chunks
@@ -29,8 +29,11 @@ class TranscriptionGUI:
         self.current_audio_path = None
         self.transcription_data = []
         self.is_transcribing = False
-        self.gemini_api_key = "AIzaSyB28oyoC-uDn8ijlQQb6vIcC0A-lL1LpSE"
-        self.language_var = tk.StringVar(value="en-US")  # Default language
+        self.gemini_api_key = ""
+        cpu_count = os.cpu_count() or 4
+        self.max_workers_english = min(6, max(2, cpu_count))  
+        self.max_workers_arabic = 1  
+        self.language_var = tk.StringVar(value="en-US")  
         
         self.setup_ui()
         
@@ -76,61 +79,27 @@ class TranscriptionGUI:
         ttk.Radiobutton(language_frame, text="English", variable=self.language_var, value="en-US").pack(side=tk.LEFT)
         ttk.Radiobutton(language_frame, text="Arabic", variable=self.language_var, value="ar-AR").pack(side=tk.LEFT)
         
-        # Arabic dialects frame
-        self.dialects_frame = ttk.LabelFrame(api_frame, text="Arabic Dialects", padding="5")
-        self.dialects_frame.grid(row=1, column=0, columnspan=4, sticky=(tk.W, tk.E), padx=5, pady=5)
+        # Update UI based on language selection
+        def update_language_ui(*args):
+            pass
         
-        # Arabic dialect checkboxes
-        self.dialect_vars = {
-            'ar-SA': tk.BooleanVar(value=True),  # Saudi Arabic
-            'ar-EG': tk.BooleanVar(value=True),  # Egyptian Arabic
-            'ar-AE': tk.BooleanVar(value=True),  # UAE Arabic
-            'ar-KW': tk.BooleanVar(value=False), # Kuwaiti Arabic
-            'ar-MA': tk.BooleanVar(value=False), # Moroccan Arabic
-            'ar-TN': tk.BooleanVar(value=False), # Tunisian Arabic
-            'ar-OM': tk.BooleanVar(value=False), # Omani Arabic
-            'ar-QA': tk.BooleanVar(value=False), # Qatari Arabic
-            'ar-BH': tk.BooleanVar(value=False)  # Bahraini Arabic
-        }
-        
-        # Create checkboxes in a grid layout
-        dialect_labels = {
-            'ar-SA': 'Saudi',
-            'ar-EG': 'Egyptian',
-            'ar-AE': 'UAE',
-            'ar-KW': 'Kuwaiti',
-            'ar-MA': 'Moroccan',
-            'ar-TN': 'Tunisian',
-            'ar-OM': 'Omani',
-            'ar-QA': 'Qatari',
-            'ar-BH': 'Bahraini'
-        }
-        
-        for i, (dialect, var) in enumerate(self.dialect_vars.items()):
-            row = i // 3
-            col = i % 3
-            ttk.Checkbutton(
-                self.dialects_frame,
-                text=dialect_labels[dialect],
-                variable=var
-            ).grid(row=row, column=col, padx=5, pady=2, sticky=tk.W)
-        
-        # Update dialects visibility based on language selection
-        def update_dialects_visibility(*args):
-            if self.language_var.get() == "ar-AR":
-                self.dialects_frame.grid()
-            else:
-                self.dialects_frame.grid_remove()
-        
-        self.language_var.trace('w', update_dialects_visibility)
-        update_dialects_visibility()  # Initial state
+        self.language_var.trace('w', update_language_ui)
         
         self.translate_check = ttk.Checkbutton(api_frame, text="Translate to Arabic", variable=self.translate_var)
         self.translate_check.grid(row=0, column=3, padx=5)
         
-        # Control buttons
+        # Control buttons and segment length selector
         control_frame = ttk.Frame(main_frame)
         control_frame.grid(row=2, column=0, columnspan=2, pady=10)
+        
+        # Add segment length selector
+        segment_frame = ttk.LabelFrame(control_frame, text="Segment Length (seconds)", padding="5")
+        segment_frame.pack(side=tk.LEFT, padx=5)
+        
+        self.segment_length = tk.StringVar(value="15")  # Default 15 seconds
+        segment_values = ["5", "10", "15", "20", "30", "45", "60"]
+        self.segment_combo = ttk.Combobox(segment_frame, textvariable=self.segment_length, values=segment_values, width=5)
+        self.segment_combo.pack(side=tk.LEFT, padx=5)
         
         self.start_button = ttk.Button(control_frame, text="Start Transcription", command=self.start_transcription)
         self.start_button.pack(side=tk.LEFT, padx=5)
@@ -141,13 +110,21 @@ class TranscriptionGUI:
         self.save_button = ttk.Button(control_frame, text="Save Results", command=self.save_results, state=tk.DISABLED)
         self.save_button.pack(side=tk.LEFT, padx=5)
         
-        # Progress bar
-        self.progress_var = tk.StringVar(value="Ready")
-        self.progress_label = ttk.Label(control_frame, textvariable=self.progress_var)
-        self.progress_label.pack(side=tk.LEFT, padx=20)
+        # Progress indicators
+        progress_frame = ttk.Frame(control_frame)
+        progress_frame.pack(side=tk.LEFT, padx=5)
         
-        self.progress_bar = ttk.Progressbar(control_frame, length=200, mode='indeterminate')
-        self.progress_bar.pack(side=tk.LEFT, padx=5)
+        self.progress_var = tk.StringVar(value="Ready")
+        self.progress_label = ttk.Label(progress_frame, textvariable=self.progress_var, justify=tk.LEFT)
+        self.progress_label.pack(side=tk.TOP, padx=20, pady=2)
+        
+        # Progress bar in determinate mode
+        self.progress_bar = ttk.Progressbar(progress_frame, length=300, mode='determinate')
+        self.progress_bar.pack(side=tk.TOP, padx=5, pady=2)
+        
+        # Initialize progress bar
+        self.progress_bar["value"] = 0
+        self.progress_bar["maximum"] = 100
         
         # Results section
         results_frame = ttk.LabelFrame(main_frame, text="Transcription Results", padding="5")
@@ -194,6 +171,16 @@ class TranscriptionGUI:
         self.current_text = scrolledtext.ScrolledText(english_frame, height=4, wrap=tk.WORD)
         self.current_text.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
         
+        # Bind keyboard shortcuts for English text
+        self.current_text.bind('<Control-b>', self.toggle_bold_english)
+        self.current_text.bind('<Control-B>', self.toggle_bold_english)
+        self.current_text.bind('<Control-i>', self.toggle_italic_english)
+        self.current_text.bind('<Control-I>', self.toggle_italic_english)
+        self.current_text.bind('<Control-k>', self.insert_inaudible_timestamp_english)
+        self.current_text.bind('<Control-K>', self.insert_inaudible_timestamp_english)
+        self.current_text.bind('<Control-l>', self.insert_unintelligible_timestamp_english)
+        self.current_text.bind('<Control-L>', self.insert_unintelligible_timestamp_english)
+        
         # Arabic text frame
         arabic_frame = ttk.LabelFrame(current_frame, text="Arabic", padding="5")
         arabic_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5)
@@ -201,6 +188,16 @@ class TranscriptionGUI:
         
         self.current_text_arabic = scrolledtext.ScrolledText(arabic_frame, height=4, wrap=tk.WORD)
         self.current_text_arabic.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
+        
+        # Bind keyboard shortcuts for Arabic text
+        self.current_text_arabic.bind('<Control-b>', self.toggle_bold_arabic)
+        self.current_text_arabic.bind('<Control-B>', self.toggle_bold_arabic)
+        self.current_text_arabic.bind('<Control-i>', self.toggle_italic_arabic)
+        self.current_text_arabic.bind('<Control-I>', self.toggle_italic_arabic)
+        self.current_text_arabic.bind('<Control-k>', self.insert_inaudible_timestamp_arabic)
+        self.current_text_arabic.bind('<Control-K>', self.insert_inaudible_timestamp_arabic)
+        self.current_text_arabic.bind('<Control-l>', self.insert_unintelligible_timestamp_arabic)
+        self.current_text_arabic.bind('<Control-L>', self.insert_unintelligible_timestamp_arabic)
         
     def browse_file(self):
         filename = filedialog.askopenfilename(
@@ -308,12 +305,11 @@ class TranscriptionGUI:
                 audio = audio.normalize()  # Normalize volume
                 audio.export(audio_file, format='wav', parameters=["-ar", "16000", "-ac", "1"])
             else:
-                # Extract audio from video
-                clip = VideoFileClip(input_path)
-                audio = clip.audio
-                clip.close()
-                # Convert to WAV with enhanced settings
-                audio.write_audiofile(audio_file, fps=16000, nbytes=2, logger=None)
+                # Extract audio from video safely using context manager
+                with VideoFileClip(input_path) as clip:
+                    audio = clip.audio
+                    # Convert to WAV with enhanced settings
+                    audio.write_audiofile(audio_file, fps=16000, nbytes=2, logger=None)
             
             return audio_file, title
         except Exception as e:
@@ -321,10 +317,10 @@ class TranscriptionGUI:
             return None, None
     
     def format_timestamp(self, seconds):
-        td = timedelta(seconds=seconds)
-        hours, remainder = divmod(td.seconds, 3600)
-        minutes, seconds = divmod(remainder, 60)
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        total_seconds = int(seconds)
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, secs = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
     
     def translate_text(self, text):
         if not self.gemini_api_key or not text.strip():
@@ -342,147 +338,234 @@ class TranscriptionGUI:
             return f"[Translation Error: {str(e)}]"
     
     def transcribe_audio_segments(self, audio_path):
-        recognizer = sr.Recognizer()
-        
-        # Initialize Whisper model for Arabic
+        """Transcribe audio in parallel where safe. English uses thread pool; Arabic (Whisper) stays single-threaded by default."""
+        # Load and enhance audio once
+        audio = AudioSegment.from_file(audio_path)
+
         if self.language_var.get() == "ar-AR":
-            try:
-                whisper_model = whisper.load_model("medium")  # You can use "base", "small", or "large" depending on your needs
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to load Whisper model: {e}")
-                return
+            audio = (
+                audio.set_channels(1)
+                     .set_frame_rate(16000)
+                     .normalize()
+                     .low_pass_filter(8000)
+                     .high_pass_filter(100)
+            )
         else:
-            # Standard settings for English
-            recognizer.energy_threshold = 300
+            audio = (
+                audio.low_pass_filter(3500)
+                     .high_pass_filter(300)
+                     .normalize()
+                     .set_channels(1)
+                     .set_frame_rate(16000)
+            )
+
+        try:
+            segment_length_sec = float(self.segment_length.get())
+        except ValueError:
+            segment_length_sec = 15.0
+        chunk_length_ms = int(segment_length_sec * 1000)
+
+        chunks = make_chunks(audio, chunk_length_ms)
+        total_chunks = len(chunks)
+        total_duration = len(audio) / 1000.0
+
+        self.progress_bar["maximum"] = total_chunks
+        self.progress_bar["value"] = 0
+        self.transcription_data = []
+
+        self.root.after(0, lambda: self.progress_var.set(
+            f"Starting transcription...\n"
+            f"Segment length: {segment_length_sec:.1f} seconds\n"
+            f"Total segments: {total_chunks}\n"
+            f"Total duration: {total_duration:.1f} seconds"
+        ))
+
+        # Pre-export chunks to temporary files and collect metadata
+        chunk_files = []
+        for i, chunk in enumerate(chunks):
+            if not self.is_transcribing:
+                break
+            timestamp_start = i * (chunk_length_ms // 1000)
+            timestamp_str = self.format_timestamp(timestamp_start)
+            chunk_filename = f"{audio_path}_chunk{i}.wav"
+            chunk.export(chunk_filename, format="wav")
+            chunk_files.append((i, chunk_filename, timestamp_str))
+
+        if not self.is_transcribing:
+            # Cleanup exported chunks if stopped
+            for _, path, _ in chunk_files:
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+            return
+
+        # Helper functions per language
+        def transcribe_english(index, chunk_path, timestamp_str, baseline_energy):
+            recognizer = sr.Recognizer()
+            recognizer.energy_threshold = baseline_energy
             recognizer.dynamic_energy_threshold = True
             recognizer.dynamic_energy_adjustment_damping = 0.15
             recognizer.dynamic_energy_ratio = 1.5
 
-        # Load and enhance audio
-        audio = AudioSegment.from_file(audio_path)
-
-        # Apply enhanced audio processing for better recognition
-        if self.language_var.get() == "ar-AR":
-            # Arabic-specific processing for Whisper
-            audio = audio.set_channels(1)  # Convert to mono
-            audio = audio.set_frame_rate(16000)  # Set optimal sample rate
-            audio = audio.normalize()  # Normalize volume
-        else:
-            # English processing
-            audio = audio.low_pass_filter(3500)
-            audio = audio.high_pass_filter(300)
-            audio = audio.normalize()
-            audio = audio.set_channels(1)
-            audio = audio.set_frame_rate(16000)
-            
-        # Set chunk length (longer for Arabic with Whisper)
-        chunk_length_ms = 30000 if self.language_var.get() == "ar-AR" else 5000  # 30 seconds for Arabic, 5 seconds for English
-        
-        chunks = make_chunks(audio, chunk_length_ms)
-        total_chunks = len(chunks)
-        self.transcription_data = []
-
-        for i, chunk in enumerate(chunks):
-            if not self.is_transcribing:
-                break
-
-            # Update progress
-            self.root.after(0, lambda i=i: self.progress_var.set(f"Processing segment {i+1}/{total_chunks}"))
-
-            timestamp_start = i * (chunk_length_ms // 1000)
-            timestamp_str = self.format_timestamp(timestamp_start)
-
-            chunk_filename = f"{audio_path}_chunk{i}.wav"
-            chunk.export(chunk_filename, format="wav")
-
             english_text = ""
             arabic_text = ""
-
             try:
-                if self.language_var.get() == "ar-AR":
-                    # Use Whisper for Arabic transcription
-                    try:
-                        result = whisper_model.transcribe(
-                            chunk_filename,
-                            language="ar",
-                            task="transcribe"
-                        )
-                        text = result["text"].strip()
-                        arabic_text = text
-
-                        # Translate to English if requested
-                        if self.translate_var.get() and self.api_key_var.get().strip():
-                            english_text = self.translate_text(text)
-                        else:
-                            english_text = ""
-
-                    except Exception as e:
-                        print(f"Whisper transcription error: {e}")
-                        arabic_text = "[خطأ في التعرف على الكلام]"
-                        english_text = ""
-                else:
-                    # Use existing speech recognition for English
-                    with sr.AudioFile(chunk_filename) as source:
-                        recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                        audio_data = recognizer.record(source)
-                        
-                        try:
-                            text = recognizer.recognize_google(audio_data, language="en-US")
-                            english_text = text
-                            
-                            # Translate to Arabic if requested
-                            if self.translate_var.get() and self.api_key_var.get().strip():
-                                arabic_text = self.translate_text(text)
-                            else:
-                                arabic_text = ""
-                        except sr.UnknownValueError:
-                            english_text = "[No speech detected]"
-                            arabic_text = ""
-                        except sr.RequestError as e:
-                            english_text = f"[API Error: {e}]"
-                            arabic_text = ""
-
-                    except sr.UnknownValueError:
-                        if self.language_var.get() == "ar-AR":
-                            arabic_text = "[لم يتم التعرف على الكلام]"
-                        else:
-                            english_text = "[No speech detected]"
-                    except sr.RequestError as e:
-                        if self.language_var.get() == "ar-AR":
-                            arabic_text = f"[خطأ في الخدمة: {e}]"
-                        else:
-                            english_text = f"[API Error: {e}]"
+                with sr.AudioFile(chunk_path) as source:
+                    audio_data = recognizer.record(source)
+                text = recognizer.recognize_google(audio_data, language="en-US")
+                text = self.process_transcription_text(text, timestamp_str)
+                english_text = text
+                if self.translate_var.get():
+                    if self.api_key_var.get().strip():
+                        arabic_text = self.translate_text(text)
+                    else:
+                        arabic_text = "[API key needed for translation]"
+            except sr.UnknownValueError:
+                english_text = "[No speech detected]"
+            except sr.RequestError as e:
+                english_text = f"[API Error: {e}]"
             finally:
-                if os.path.exists(chunk_filename):
+                try:
+                    os.remove(chunk_path)
+                except Exception:
+                    pass
+            return index, timestamp_str, english_text, arabic_text
+
+        def transcribe_arabic(index, chunk_path, timestamp_str, whisper_model):
+            english_text = ""
+            arabic_text = ""
+            try:
+                result = whisper_model.transcribe(
+                    chunk_path,
+                    language="ar",
+                    task="transcribe",
+                    initial_prompt=(
+                        "Transcribe in Modern Standard Arabic. If this is a conversation, "
+                        "format each speaker's line with a dash (-) at the beginning. "
+                        "If there's a clear speaker identification, include it with a colon."
+                    ),
+                )
+                text = result.get("text", "").strip()
+                text = self.process_transcription_text(text, timestamp_str)
+                if text.count("-") > 1 or ":" in text:
+                    arabic_text = text
+                else:
+                    arabic_text = f"- {text}" if text and not text.startswith("-") else text
+                if self.translate_var.get():
+                    if self.api_key_var.get().strip():
+                        english_text = self.translate_text(text)
+                    else:
+                        english_text = "[API key needed for translation]"
+            except Exception as e:
+                print(f"Whisper transcription error: {e}")
+                arabic_text = "[خطأ في التعرف على الكلام]"
+            finally:
+                try:
+                    os.remove(chunk_path)
+                except Exception:
+                    pass
+            return index, timestamp_str, english_text, arabic_text
+
+        futures = []
+        if self.language_var.get() == "ar-AR":
+            try:
+                whisper_model = whisper.load_model("medium")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load Whisper model: {e}")
+                # Cleanup chunks
+                for _, path, _ in chunk_files:
                     try:
-                        os.remove(chunk_filename)
-                    except PermissionError:
+                        os.remove(path)
+                    except Exception:
                         pass
+                return
+            max_workers = self.max_workers_arabic
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                for idx, path, ts in chunk_files:
+                    if not self.is_transcribing:
+                        break
+                    futures.append(executor.submit(transcribe_arabic, idx, path, ts, whisper_model))
+                # Ensure ordered emission by index
+                completed = 0
+                next_index = 0
+                results_by_index = {}
+                for future in as_completed(futures):
+                    if not self.is_transcribing:
+                        break
+                    idx, ts, en_text, ar_text = future.result()
+                    results_by_index[idx] = (ts, en_text, ar_text)
+                    # Flush in order
+                    while next_index in results_by_index:
+                        ts_f, en_f, ar_f = results_by_index.pop(next_index)
+                        segment_data = {'timestamp': ts_f, 'english': en_f, 'arabic': ar_f}
+                        self.transcription_data.append(segment_data)
+                        completed += 1
+                        self._update_progress_ui(completed, total_chunks, next_index, chunk_length_ms)
+                        self.root.after(0, lambda data=segment_data: (
+                            self.add_to_tree(data),
+                            self.update_current_display(en_f, ar_f),
+                            self.tree.see(self.tree.get_children()[-1]) if self.tree.get_children() else None
+                        ))
+                        next_index += 1
+        else:
+            max_workers = self.max_workers_english
+            # Compute ambient noise baseline once using first chunk
+            try:
+                tmp_rec = sr.Recognizer()
+                with sr.AudioFile(chunk_files[0][1]) as source0:
+                    tmp_rec.adjust_for_ambient_noise(source0, duration=0.3)
+                    baseline_energy = tmp_rec.energy_threshold
+            except Exception:
+                baseline_energy = 300
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                for idx, path, ts in chunk_files:
+                    if not self.is_transcribing:
+                        break
+                    futures.append(executor.submit(transcribe_english, idx, path, ts, baseline_energy))
+                # Ensure ordered emission
+                completed = 0
+                next_index = 0
+                results_by_index = {}
+                for future in as_completed(futures):
+                    if not self.is_transcribing:
+                        break
+                    idx, ts, en_text, ar_text = future.result()
+                    results_by_index[idx] = (ts, en_text, ar_text)
+                    while next_index in results_by_index:
+                        ts_f, en_f, ar_f = results_by_index.pop(next_index)
+                        segment_data = {'timestamp': ts_f, 'english': en_f, 'arabic': ar_f}
+                        self.transcription_data.append(segment_data)
+                        completed += 1
+                        self._update_progress_ui(completed, total_chunks, next_index, chunk_length_ms)
+                        self.root.after(0, lambda data=segment_data: (
+                            self.add_to_tree(data),
+                            self.update_current_display(en_f, ar_f),
+                            self.tree.see(self.tree.get_children()[-1]) if self.tree.get_children() else None
+                        ))
+                        next_index += 1
 
-            # Store segment data
-            segment_data = {
-                'timestamp': timestamp_str,
-                'english': english_text,
-                'arabic': arabic_text
-            }
-            self.transcription_data.append(segment_data)
+        # Final cleanup: remove any remaining chunk files if they still exist
+        for _, path, _ in chunk_files:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except Exception:
+                pass
 
-            # Update tree view and current display immediately
-            self.root.after(0, lambda data=segment_data: (
-                self.add_to_tree(data),
-                self.update_current_display(english_text, arabic_text),
-                self.tree.see(self.tree.get_children()[-1]) if self.tree.get_children() else None
-            ))
-
-            # Update progress with time information
-            current_time = (i + 1) * (chunk_length_ms // 1000)
-            total_time = total_chunks * (chunk_length_ms // 1000)
-            self.root.after(0, lambda: self.progress_var.set(
-                f"Processing {current_time}s / {total_time}s ({i+1}/{total_chunks} chunks)"
-            ))
-
-            # Brief delay for UI responsiveness
-            time.sleep(0.05)
+    def _update_progress_ui(self, completed, total_chunks, idx, chunk_length_ms):
+        current_time = completed * (chunk_length_ms // 1000)
+        total_time = total_chunks * (chunk_length_ms // 1000)
+        segment_start = idx * (chunk_length_ms // 1000)
+        segment_end = (idx + 1) * (chunk_length_ms // 1000)
+        status_text = (
+            f"Segment {completed}/{total_chunks}\n"
+            f"Current segment: {segment_start}-{segment_end} seconds\n"
+            f"Progress: {(completed/total_chunks)*100:.1f}%\n"
+            f"Total progress: {current_time}s / {total_time}s"
+        )
+        self.root.after(0, lambda: self.progress_var.set(status_text))
+        self.root.after(0, lambda: setattr(self.progress_bar, "value", completed))
     
     def process_audio_stream(self, audio_path):
         """Process audio in a streaming fashion while it's being downloaded/prepared"""
@@ -517,9 +600,21 @@ class TranscriptionGUI:
             
     def update_current_display(self, english_text, arabic_text=""):
         self.current_text.delete(1.0, tk.END)
-        self.current_text.insert(1.0, english_text)
         self.current_text_arabic.delete(1.0, tk.END)
-        self.current_text_arabic.insert(1.0, arabic_text)
+        
+        # If in Arabic mode, prioritize showing Arabic text
+        if self.language_var.get() == "ar-AR":
+            # Show Arabic text always
+            self.current_text_arabic.insert(1.0, arabic_text)
+            # Only show English if translation was requested
+            if self.translate_var.get():
+                self.current_text.insert(1.0, english_text)
+        else:
+            # In English mode
+            self.current_text.insert(1.0, english_text)
+            # Only show Arabic if translation was requested
+            if self.translate_var.get():
+                self.current_text_arabic.insert(1.0, arabic_text)
     
     def on_tree_select(self, event):
         selected_items = self.tree.selection()
@@ -558,7 +653,7 @@ class TranscriptionGUI:
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
         self.save_button.config(state=tk.DISABLED)
-        self.progress_bar.start()
+        self.progress_bar["value"] = 0
         self.progress_var.set("Preparing...")
         
         # Start transcription in a separate thread
@@ -581,16 +676,9 @@ class TranscriptionGUI:
                 if not audio_path or not self.is_transcribing:
                     return
                 
-                # Process audio in streaming fashion
+                # Start transcription
                 self.root.after(0, lambda: self.progress_var.set("Starting transcription..."))
-                
-                # Create a thread pool for parallel processing
-                with ThreadPoolExecutor(max_workers=2) as executor:
-                    # Submit audio processing task
-                    audio_future = executor.submit(self.process_audio_stream, audio_path)
-                    
-                    # Start transcription immediately while audio is being processed
-                    self.transcribe_audio_segments(audio_path)
+                self.transcribe_audio_segments(audio_path)
                 
         except Exception as e:
             self.root.after(0, lambda: messagebox.showerror("Error", f"Transcription failed: {e}"))
@@ -602,7 +690,7 @@ class TranscriptionGUI:
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         self.save_button.config(state=tk.NORMAL)
-        self.progress_bar.stop()
+        self.progress_bar["value"] = self.progress_bar["maximum"]
         self.progress_var.set("Transcription completed")
         
         if self.transcription_data:
@@ -611,6 +699,124 @@ class TranscriptionGUI:
     def stop_transcription(self):
         self.is_transcribing = False
         self.progress_var.set("Stopping...")
+    
+    def process_transcription_text(self, text, timestamp):
+        """Automatically process and format transcription text"""
+        # Define noise patterns to detect
+        background_noise_patterns = [
+            r'\b(background|noise|static|silence|hum|buzz|interference)\b',
+            r'\b(muffled|unclear|distant|faint)\s+(voice|speech|sound|audio)\b',
+            r'\b(low|poor)\s+quality\b'
+        ]
+        
+        # Initialize processed text
+        processed_text = text
+        
+        # Check for segments that might need [inaudible] tag
+        for pattern in background_noise_patterns:
+            if re.search(pattern, processed_text, re.IGNORECASE):
+                processed_text = f"[inaudible {timestamp}] {processed_text}"
+                break
+        
+        # Check for unclear or unintelligible segments
+        unclear_patterns = [
+            r'\b(unintelligible|incomprehensible|indiscernible)\b',
+            r'\b(cannot|can\'t)\s+(understand|hear|make out)\b',
+            r'\b(unclear|inaudible)\s+(speech|words|segment)\b'
+        ]
+        
+        for pattern in unclear_patterns:
+            if re.search(pattern, processed_text, re.IGNORECASE):
+                processed_text = f"[unintelligible {timestamp}] {processed_text}"
+                break
+        
+        # Process emphasis patterns (for bold and italic)
+        # Look for words in ALL CAPS or with surrounding punctuation that might indicate emphasis
+        words = processed_text.split()
+        for i, word in enumerate(words):
+            # Check for emphasized words (ALL CAPS)
+            if word.isupper() and len(word) > 1:
+                words[i] = f"**{word}**"  # Make it bold
+            # Check for words with special punctuation that might indicate emphasis
+            elif word.startswith('!') and word.endswith('!'):
+                words[i] = f"*{word}*"  # Make it italic
+        
+        processed_text = ' '.join(words)
+        
+        # Look for repeated words or sounds that might indicate emphasis
+        processed_text = re.sub(r'(\b\w+\b)(\s+\1\b)+', r'**\1**', processed_text)
+        
+        # Look for words between asterisks or underscores and format them
+        processed_text = re.sub(r'\*(\w+)\*', r'*\1*', processed_text)  # Italic
+        processed_text = re.sub(r'_(\w+)_', r'*\1*', processed_text)    # Italic
+        processed_text = re.sub(r'\*\*(\w+)\*\*', r'**\1**', processed_text)  # Bold
+        
+        return processed_text
+        
+    def get_current_timestamp(self):
+        """Get timestamp from currently selected segment"""
+        selected_items = self.tree.selection()
+        if selected_items:
+            item = selected_items[0]
+            values = self.tree.item(item)['values']
+            if values:
+                return values[0]  # timestamp is the first value
+        return "00:00:00"
+        
+    def format_text(self, widget, format_type):
+        try:
+            selected_text = widget.get(tk.SEL_FIRST, tk.SEL_END)
+            if selected_text:
+                if format_type == "bold":
+                    formatted_text = f"**{selected_text}**"
+                elif format_type == "italic":
+                    formatted_text = f"*{selected_text}*"
+                widget.delete(tk.SEL_FIRST, tk.SEL_END)
+                widget.insert(tk.INSERT, formatted_text)
+        except tk.TclError:
+            pass  # No selection
+            
+    def insert_timestamp_text(self, widget, timestamp_type):
+        timestamp = self.get_current_timestamp()
+        if timestamp_type == "inaudible":
+            text = f"[inaudible {timestamp}]"
+        else:
+            text = f"[unintelligible {timestamp}]"
+        widget.insert(tk.INSERT, text)
+            
+    def toggle_bold_english(self, event):
+        self.format_text(self.current_text, "bold")
+        return "break"
+        
+    def toggle_italic_english(self, event):
+        self.format_text(self.current_text, "italic")
+        return "break"
+        
+    def insert_inaudible_timestamp_english(self, event):
+        self.insert_timestamp_text(self.current_text, "inaudible")
+        return "break"
+        
+    def insert_unintelligible_timestamp_english(self, event):
+        self.insert_timestamp_text(self.current_text, "unintelligible")
+        return "break"
+        
+    def toggle_bold_arabic(self, event):
+        self.format_text(self.current_text_arabic, "bold")
+        return "break"
+        
+    def toggle_italic_arabic(self, event):
+        self.format_text(self.current_text_arabic, "italic")
+        return "break"
+        
+    def insert_inaudible_timestamp_arabic(self, event):
+        timestamp = self.get_current_timestamp()
+        self.insert_timestamp_text(self.current_text_arabic, "inaudible")
+        return "break"
+        
+    def insert_unintelligible_timestamp_arabic(self, event):
+        timestamp = self.get_current_timestamp()
+        self.insert_timestamp_text(self.current_text_arabic, "unintelligible")
+        return "break"
     
     def save_results(self):
         if not self.transcription_data:
@@ -641,12 +847,79 @@ class TranscriptionGUI:
                     if segment['english'] and not segment['english'].startswith('['):
                         f.write(f"{segment['english']} ")
             
-            # Save Arabic translation if available
+            # Save Arabic translation if available with Gemini AI correction
             if any(segment['arabic'] for segment in self.transcription_data):
-                with open(f"{base_name}_arabic.txt", "w", encoding="utf-8") as f:
-                    for segment in self.transcription_data:
-                        if segment['arabic'] and not segment['arabic'].startswith('['):
-                            f.write(f"{segment['arabic']} ")
+                # Collect all Arabic text for batch correction
+                arabic_text = " ".join([
+                    segment['arabic'] 
+                    for segment in self.transcription_data 
+                    if segment['arabic'] and not segment['arabic'].startswith('[')
+                ])
+                
+                # Use Gemini AI to correct the Arabic text
+                try:
+                    if self.gemini_api_key and arabic_text.strip():
+                        genai.configure(api_key=self.gemini_api_key)
+                        model = genai.GenerativeModel('gemini-2.0-flash')
+                        
+                        prompt = (
+                            "قم بتصحيح الأخطاء الإملائية والنحوية فقط في النص التالي مع الحفاظ على نفس الكلمات والمعنى. "
+                            "قد يكون هذا حواراً بين عدة متحدثين. "
+                            "قواعد مهمة:\n"
+                            "1. حافظ على علامات المتحدثين (الأسطر التي تبدأ بـ '-' أو تحتوي على ':')\n"
+                            "2. حافظ على فواصل الأسطر بين المتحدثين\n"
+                            "3. حافظ على أسماء المتحدثين إن وجدت (قبل علامة :)\n"
+                            "4. صحح الأخطاء النحوية والإملائية فقط دون تغيير الكلمات\n"
+                            "5. حافظ على نفس المصطلحات والكلمات المستخدمة حتى لو كانت عامية\n\n"
+                            "النص المراد تصحيحه:\n"
+                            f"{arabic_text}"
+                        )
+                        
+                        response = model.generate_content(prompt)
+                        corrected_arabic = response.text.strip()
+                    else:
+                        corrected_arabic = arabic_text
+                        
+                    # Save the corrected Arabic text with proper conversation formatting
+                    with open(f"{base_name}_arabic.txt", "w", encoding="utf-8") as f:
+                        # Add a header for the transcript
+                        f.write("المحادثة:\n")
+                        f.write("=" * 40 + "\n\n")
+                        
+                        # Write the corrected text with proper line spacing for conversations
+                        lines = corrected_arabic.split('\n')
+                        for line in lines:
+                            if line.strip():
+                                # Add extra spacing for new speakers
+                                if line.strip().startswith('-') or ':' in line:
+                                    f.write('\n')
+                                f.write(line + '\n')
+                        
+                    # Update the transcription data with corrected text
+                    if self.gemini_api_key:
+                        # Split by conversation turns instead of word count
+                        corrected_lines = corrected_arabic.split('\n')
+                        valid_segments = [s for s in self.transcription_data if s['arabic'] and not s['arabic'].startswith('[')]
+                        
+                        # Try to match corrected lines with segments based on content similarity
+                        current_line = 0
+                        for segment in valid_segments:
+                            if current_line < len(corrected_lines):
+                                segment['arabic'] = corrected_lines[current_line].strip()
+                                current_line += 1
+                        
+                        for segment in self.transcription_data:
+                            if segment['arabic'] and not segment['arabic'].startswith('['):
+                                segment['arabic'] = corrected_lines[current_line].strip()
+                                current_line += 1
+                                
+                except Exception as e:
+                    print(f"Arabic correction error: {e}")
+                    # Fallback to original text if correction fails
+                    with open(f"{base_name}_arabic.txt", "w", encoding="utf-8") as f:
+                        for segment in self.transcription_data:
+                            if segment['arabic'] and not segment['arabic'].startswith('['):
+                                f.write(f"{segment['arabic']} ")
             
             # Save complete data as JSON
             with open(f"{base_name}_complete.json", "w", encoding="utf-8") as f:
