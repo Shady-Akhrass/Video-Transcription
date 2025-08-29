@@ -1,107 +1,128 @@
-## Video Transcription Tool with Translation
+# Video Transcription Tool with Translation
 
-A desktop GUI app (Tkinter) that transcribes audio/video files or YouTube URLs into text, with optional English↔Arabic translation and Arabic text correction using Google Gemini. It segments audio, shows progress, and lets you review/edit current segments quickly.
+A modular Python application for transcribing video/audio files with support for English and Arabic, including translation capabilities using Google Gemini AI.
 
-### Features
-- **Local or YouTube input**: Pick a file or paste a YouTube URL (uses `yt-dlp`).
-- **English mode**: Transcribes with Google Speech Recognition via `SpeechRecognition`.
-- **Arabic mode**: Transcribes with OpenAI Whisper (`openai-whisper`).
-- **Optional translation**: Uses Google Gemini for English→Arabic (or Arabic→English) translation.
-- **Batch save**: Exports timestamps, English-only, Arabic-corrected, and a complete JSON.
-- **Keyboard shortcuts**: Quick bold/italic and insert `[inaudible]` / `[unintelligible]` markers.
-- **Segment length**: Choose how long each segment is for processing.
+## Project Structure
 
-## Requirements
-- **Python**: 3.9+ recommended
-- **FFmpeg**: Required by `moviepy` and `pydub`
-- **Internet access**: For YouTube downloads and cloud recognition/translation
-- **Optional**: Google Gemini API key for translation and Arabic text correction
+The application has been separated into logical modules for better maintainability:
 
-### Install FFmpeg (Windows)
-- With Winget:
-```powershell
-winget install FFmpeg.FFmpeg
-```
-- Or with Chocolatey:
-```powershell
-choco install ffmpeg -y
-```
-After install, open a new terminal and verify:
-```powershell
-ffmpeg -version
-```
+### Core Modules
+
+- **`gui.py`** - User interface components and layout
+- **`audio_processor.py`** - Audio processing, YouTube download, and file conversion
+- **`transcription_engine.py`** - Speech recognition and translation engine
+- **`file_operations.py`** - File saving, loading, and export operations
+- **`main_app.py`** - Main application that integrates all modules
+
+### Entry Point
+
+- **`main.py`** - Original monolithic file (kept for reference)
+- **`main_app.py`** - New modular entry point
+
+## Features
+
+- **Multi-format Support**: MP4, AVI, MKV, MOV, WMV, FLV, WebM, MP3, WAV, AAC, OGG
+- **YouTube Integration**: Direct URL processing with yt-dlp
+- **Language Support**: English and Arabic transcription
+- **Translation**: Google Gemini AI-powered translation between languages
+- **Export Formats**: TXT, JSON, SRT, VTT
+- **Real-time Processing**: Streaming audio processing with progress tracking
+- **Text Formatting**: Bold, italic, and timestamp insertion support
 
 ## Installation
-From a PowerShell terminal in the project folder:
 
-```powershell
-# (Recommended) Create and activate a virtual environment
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+1. Install Python 3.8 or higher
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. Install FFmpeg (required for audio processing):
+   - Windows: Download from https://ffmpeg.org/download.html
+   - macOS: `brew install ffmpeg`
+   - Linux: `sudo apt install ffmpeg`
 
-# Upgrade pip
-python -m pip install --upgrade pip
+## Usage
 
-# Install core dependencies
-pip install yt-dlp moviepy pydub SpeechRecognition google-generativeai openai-whisper
+### Running the Application
 
-# Install PyTorch (choose ONE of the following):
-# CPU-only (simplest):
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-
-# For NVIDIA GPU (example for CUDA 12.1; see PyTorch site for other versions):
-# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```bash
+python main_app.py
 ```
 
-Notes:
-- If `openai-whisper` complains about missing PyTorch, install PyTorch first, then reinstall Whisper.
-- On first run, Whisper will download the selected model.
+### Basic Workflow
 
-## Running the App
-```powershell
-python main.py
-```
+1. **Input**: Provide a video file path or YouTube URL
+2. **Configuration**: 
+   - Set language (English/Arabic)
+   - Configure segment length (5-60 seconds)
+   - Add Google Gemini API key for translation (optional)
+3. **Processing**: Click "Start Transcription" to begin
+4. **Results**: View results in the tree view and edit in the current segment panel
+5. **Export**: Save results in multiple formats
 
-### Quick Start
-1. **Input**: Browse for an audio/video file or paste a YouTube URL.
-2. **Language**: Select `English` or `Arabic`.
-3. **(Optional) Translation**: Tick “Translate to Arabic” (English mode) or to English (Arabic mode).
-4. **(Optional) API key**: Paste your Google Gemini API key if translation/correction is desired.
-5. **Segment length**: Choose a duration (e.g., 15s).
-6. **Start**: Click “Start Transcription”.
-7. **Review**: Monitor progress, click any row to load its texts into the editors.
-8. **Save**: Click “Save Results” to export outputs.
+### Keyboard Shortcuts
 
-### What happens under the hood
-- **English mode**: Uses `SpeechRecognition` → Google Speech Recognition API.
-- **Arabic mode**: Uses `openai-whisper` (model `medium` by default).
-- **Translation**: Uses Google Gemini (`gemini-2.0-flash`).
-- **YouTube**: Downloads best audio via `yt-dlp`, converts to WAV, and segments.
+- **Ctrl+B**: Bold text
+- **Ctrl+I**: Italic text
+- **Ctrl+K**: Insert [inaudible] timestamp
+- **Ctrl+L**: Insert [unintelligible] timestamp
 
-## Outputs
-When you save, these files are created next to your chosen base name:
-- `..._timestamps.txt`: Timestamped English lines
-- `..._english.txt`: English text only (non-bracketed entries)
-- `..._arabic.txt`: Arabic text, optionally corrected by Gemini and formatted for conversations
-- `..._complete.json`: Full structured data for all segments
+## API Configuration
 
-Arabic correction uses Gemini if an API key is provided. It preserves speaker markers and line breaks.
+For translation features, you'll need a Google Gemini API key:
 
-## Configuration Tips
-- **Model size for Arabic**: The Whisper model is set to `"medium"` in `main.py`. On low-spec machines you may change it to `"small"` or `"base"`:
-  - Look for `whisper.load_model("medium")` and adjust as needed.
-- **Segment length**: Shorter segments improve responsiveness but add more API calls.
-- **Translation**: Requires a valid Gemini API key; otherwise placeholders are shown.
+1. Visit [Google AI Studio](https://makersuite.google.com/app/apikey)
+2. Create an API key
+3. Enter the key in the application's API Key field
 
-## Troubleshooting
-- **FFmpeg not found**: Ensure `ffmpeg -version` works in a new terminal. Reinstall via Winget/Chocolatey and confirm your PATH.
-- **PyTorch/Whisper errors**: Install PyTorch first (CPU or GPU variant), then `openai-whisper`.
-- **Google SpeechRecognition errors**: These can be temporary quota/network errors; retry or switch to local Whisper (Arabic mode) if appropriate.
-- **yt-dlp download issues**: Some videos are geo-restricted/age-gated. Update `yt-dlp` (`pip install -U yt-dlp`) and ensure network access.
-- **Slow or high CPU usage**: Use shorter segments, reduce background apps, or switch Whisper model to `small`/`base`.
+## Module Details
 
-## Privacy & Security
-- API keys are only used in-memory during a session and not stored by the app. Do not commit keys to source control.
+### GUI Module (`gui.py`)
+- Main window layout and widgets
+- Event handling and user interactions
+- Text formatting and keyboard shortcuts
+- Progress tracking display
+
+### Audio Processor (`audio_processor.py`)
+- YouTube video download using yt-dlp
+- Audio extraction from video files
+- Audio format conversion and optimization
+- Language-specific audio processing
+
+### Transcription Engine (`transcription_engine.py`)
+- Google Speech Recognition for English
+- OpenAI Whisper for Arabic
+- Parallel processing with thread pools
+- Text post-processing and formatting
+
+### File Operations (`file_operations.py`)
+- Multi-format export (TXT, JSON, SRT, VTT)
+- Arabic text correction using Gemini AI
+- Timestamp formatting and conversion
+- File loading and validation
+
+## Performance Considerations
+
+- **English**: Uses Google Speech Recognition with parallel processing
+- **Arabic**: Uses Whisper model with single-threaded processing for stability
+- **Memory**: Processes audio in configurable segments to manage memory usage
+- **Threading**: Configurable worker threads based on CPU cores
+
+## Error Handling
+
+- Graceful fallback for API failures
+- Temporary file cleanup on errors
+- User-friendly error messages
+- Progress tracking during long operations
+
+## Contributing
+
+The modular structure makes it easy to:
+- Add new audio formats
+- Implement additional transcription engines
+- Extend export formats
+- Modify the user interface
 
 ## License
-No license specified. Consider adding one if you plan to share or publish this project. 
+
+This project is open source. Please check individual dependency licenses for compliance. 
